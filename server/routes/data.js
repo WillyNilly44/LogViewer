@@ -1,9 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../config/database');
+const SqlHelper = require('../utils/sqlHelper');
 
 // Initialize database connection
 db.connect().catch(console.error);
+
+// Initialize SQL helper
+const sqlHelper = new SqlHelper(process.env.DB_TYPE || 'postgresql');
 
 // GET /api/data - Fetch all data (with pagination)
 router.get('/', async (req, res) => {
@@ -12,18 +16,13 @@ router.get('/', async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const offset = (page - 1) * limit;
 
-    // Example query - replace with your actual table name and columns
-    const query = `
-      SELECT * FROM logs 
-      ORDER BY created_at DESC 
-      LIMIT $1 OFFSET $2
-    `;
-    
-    const data = await db.query(query, [limit, offset]);
+    // Get paginated data using SQL helper
+    const { query, params } = sqlHelper.getPaginatedQuery('logs', 'created_at DESC', limit, offset);
+    const data = await db.query(query, params);
     
     // Get total count for pagination
-    const countQuery = 'SELECT COUNT(*) FROM logs';
-    const countResult = await db.query(countQuery);
+    const { query: countQuery, params: countParams } = sqlHelper.getCountQuery('logs');
+    const countResult = await db.query(countQuery, countParams);
     const total = parseInt(countResult[0].count);
 
     res.json({
@@ -51,16 +50,9 @@ router.get('/search', async (req, res) => {
       return res.status(400).json({ error: 'Search query is required' });
     }
 
-    // Example search query - adjust based on your table structure
-    const query = `
-      SELECT * FROM logs 
-      WHERE message ILIKE $1 OR level ILIKE $1
-      ORDER BY created_at DESC 
-      LIMIT $2 OFFSET $3
-    `;
-    
-    const searchTerm = `%${q}%`;
-    const data = await db.query(query, [searchTerm, limit, offset]);
+    // Search in message and level columns
+    const { query, params } = sqlHelper.getSearchQuery('logs', ['message', 'level'], q, limit, offset);
+    const data = await db.query(query, params);
 
     res.json({ data });
   } catch (error) {
@@ -72,22 +64,21 @@ router.get('/search', async (req, res) => {
 // GET /api/data/stats - Get statistics
 router.get('/stats', async (req, res) => {
   try {
-    // Example statistics queries - adjust based on your needs
-    const queries = {
-      total: 'SELECT COUNT(*) as count FROM logs',
-      today: `SELECT COUNT(*) as count FROM logs WHERE DATE(created_at) = CURRENT_DATE`,
-      byLevel: `SELECT level, COUNT(*) as count FROM logs GROUP BY level`
-    };
+    // Get statistics using SQL helper
+    const totalQuery = sqlHelper.getCountQuery('logs');
+    const todayQuery = sqlHelper.getTodayQuery('logs');
+    const levelQuery = sqlHelper.getByLevelQuery('logs');
 
-    const results = {};
-    for (const [key, query] of Object.entries(queries)) {
-      results[key] = await db.query(query);
-    }
+    const [totalResult, todayResult, levelResult] = await Promise.all([
+      db.query(totalQuery.query, totalQuery.params),
+      db.query(todayQuery.query, todayQuery.params),
+      db.query(levelQuery.query, levelQuery.params)
+    ]);
 
     res.json({
-      total: results.total[0].count,
-      today: results.today[0].count,
-      byLevel: results.byLevel
+      total: totalResult[0].count,
+      today: todayResult[0].count,
+      byLevel: levelResult
     });
   } catch (error) {
     console.error('Error fetching stats:', error);
@@ -99,8 +90,8 @@ router.get('/stats', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const query = 'SELECT * FROM logs WHERE id = $1';
-    const data = await db.query(query, [id]);
+    const { query, params } = sqlHelper.getByIdQuery('logs', id);
+    const data = await db.query(query, params);
 
     if (data.length === 0) {
       return res.status(404).json({ error: 'Record not found' });

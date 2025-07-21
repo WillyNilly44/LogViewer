@@ -1,5 +1,6 @@
 const { Pool } = require('pg');
 const mysql = require('mysql2/promise');
+const sql = require('mssql');
 
 class DatabaseConnection {
   constructor() {
@@ -44,6 +45,32 @@ class DatabaseConnection {
         const connection = await this.connection.getConnection();
         console.log('Connected to MySQL database');
         connection.release();
+      } else if (this.dbType === 'mssql') {
+        this.connection = new sql.ConnectionPool({
+          server: process.env.DB_HOST,
+          port: parseInt(process.env.DB_PORT) || 1433,
+          database: process.env.DB_NAME,
+          user: process.env.DB_USER,
+          password: process.env.DB_PASSWORD,
+          options: {
+            encrypt: process.env.DB_SSL === 'true',
+            trustServerCertificate: true,
+            enableArithAbort: true,
+            cryptoCredentialsDetails: {
+              minVersion: 'TLSv1'
+            }
+          },
+          pool: {
+            max: 20,
+            min: 0,
+            idleTimeoutMillis: 30000,
+          },
+          connectionTimeout: 60000,
+          requestTimeout: 60000,
+        });
+
+        await this.connection.connect();
+        console.log('Connected to SQL Server database');
       }
     } catch (error) {
       console.error('Database connection failed:', error);
@@ -59,6 +86,14 @@ class DatabaseConnection {
       } else if (this.dbType === 'mysql') {
         const [rows] = await this.connection.execute(sql, params);
         return rows;
+      } else if (this.dbType === 'mssql') {
+        const request = this.connection.request();
+        // Add parameters to the request
+        params.forEach((param, index) => {
+          request.input(`param${index}`, param);
+        });
+        const result = await request.query(sql);
+        return result.recordset;
       }
     } catch (error) {
       console.error('Query execution failed:', error);
@@ -72,6 +107,8 @@ class DatabaseConnection {
         await this.connection.end();
       } else if (this.dbType === 'mysql') {
         await this.connection.end();
+      } else if (this.dbType === 'mssql') {
+        await this.connection.close();
       }
       console.log('Database connection closed');
     }
